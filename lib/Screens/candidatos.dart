@@ -1,0 +1,450 @@
+import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+class CandidatosScreen extends StatelessWidget {
+  final String donacionId;
+  final String coleccionOrigen;
+
+  const CandidatosScreen({
+    super.key,
+    required this.donacionId,
+    required this.coleccionOrigen,
+  });
+
+  void _abrirWhatsApp(
+    BuildContext context,
+    String nombre,
+    String telefono,
+  ) async {
+    if (telefono.isEmpty) return;
+    String numeroLimpio = telefono.replaceAll(RegExp(r'[^\d+]'), '');
+    if (!numeroLimpio.startsWith('+')) {
+      numeroLimpio = '+591$numeroLimpio';
+    }
+
+    final Uri whatsappUri = Uri.parse(
+      "https://wa.me/$numeroLimpio?text=Hola%20$nombre,%20vi%20tu%20postulación%20en%20Gracia...",
+    );
+    if (await canLaunchUrl(whatsappUri)) {
+      await launchUrl(whatsappUri, mode: LaunchMode.externalApplication);
+    } else {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("No se pudo abrir WhatsApp")),
+      );
+    }
+  }
+
+  void _iniciarTransaccion(
+    BuildContext context,
+    String candidatoUid,
+    String candidatoNombre,
+  ) async {
+    await FirebaseFirestore.instance
+        .collection(coleccionOrigen)
+        .doc(donacionId)
+        .update({
+          'transaccion_activa': true,
+          'receptorId': candidatoUid,
+          'receptorNombre': candidatoNombre,
+          'confirmado_por_emisor': false,
+          'confirmado_por_receptor': false,
+        });
+
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          "Trámite iniciado con $candidatoNombre. Esperando confirmación mutua.",
+        ),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
+  // --- LÓGICA MEJORADA CON HISTORIAL DE INTERCAMBIOS (Opción 1) ---
+  void _procesarConfirmacionFinal(
+    BuildContext context,
+    String emisorId,
+    String receptorId,
+    Map<String, dynamic> datosPost,
+  ) async {
+    final DocumentReference emisorRef = FirebaseFirestore.instance
+        .collection('usuarios')
+        .doc(emisorId);
+    final DocumentReference receptorRef = FirebaseFirestore.instance
+        .collection('usuarios')
+        .doc(receptorId);
+
+    // 1. Guardar copia en la colección global de historial antes de borrar el post
+    await FirebaseFirestore.instance.collection('historial').add({
+      'item': datosPost['item'] ?? 'Sin título',
+      'descripcion': datosPost['descripcion'] ?? '',
+      'categoria': datosPost['categoria'] ?? 'Cosas',
+      'tipo': coleccionOrigen, // 'donaciones' o 'necesidades'
+      'emisorId': emisorId,
+      'emisorNombre': datosPost['donante'] ?? 'Usuario',
+      'receptorId': receptorId,
+      'receptorNombre': datosPost['receptorNombre'] ?? 'Candidato',
+      'fecha_completado': FieldValue.serverTimestamp(),
+    });
+
+    // 2. Ejecutar transacción para incrementar los contadores en los perfiles de los usuarios
+    await FirebaseFirestore.instance.runTransaction((transaction) async {
+      DocumentSnapshot emisorSnap = await transaction.get(emisorRef);
+      DocumentSnapshot receptorSnap = await transaction.get(receptorRef);
+
+      if (emisorSnap.exists && receptorSnap.exists) {
+        int actualesEntregadas =
+            (emisorSnap.data()
+                as Map<String, dynamic>)['donaciones_entregadas'] ??
+            0;
+        int actualesRecibidas =
+            (receptorSnap.data()
+                as Map<String, dynamic>)['donaciones_recibidas'] ??
+            0;
+
+        if (coleccionOrigen == 'donaciones') {
+          transaction.update(emisorRef, {
+            'donaciones_entregadas': actualesEntregadas + 1,
+          });
+          transaction.update(receptorRef, {
+            'donaciones_recibidas': actualesRecibidas + 1,
+          });
+        } else {
+          int miActualRecibida =
+              (emisorSnap.data()
+                  as Map<String, dynamic>)['donaciones_recibidas'] ??
+              0;
+          int candidatoActualEntregada =
+              (receptorSnap.data()
+                  as Map<String, dynamic>)['donaciones_entregadas'] ??
+              0;
+
+          transaction.update(emisorRef, {
+            'donaciones_recibidas': miActualRecibida + 1,
+          });
+          transaction.update(receptorRef, {
+            'donaciones_entregadas': candidatoActualEntregada + 1,
+          });
+        }
+      }
+    });
+
+    // 3. Borrar el documento original del muro
+    await FirebaseFirestore.instance
+        .collection(coleccionOrigen)
+        .doc(donacionId)
+        .delete();
+
+    if (!context.mounted) return;
+    Navigator.pop(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("¡Transacción completada e Historial archivado! 🎉"),
+        backgroundColor: Colors.orange,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String miUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Gestión de Entrega"),
+        backgroundColor: Colors.orange,
+      ),
+      body: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection(coleccionOrigen)
+            .doc(donacionId)
+            .snapshots(),
+        builder: (context, postSnapshot) {
+          if (!postSnapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (!postSnapshot.data!.exists) {
+            return const Center(child: Text("La publicación ya no existe."));
+          }
+
+          var postData = postSnapshot.data!.data() as Map<String, dynamic>;
+          bool transaccionActiva = postData['transaccion_activa'] ?? false;
+          String? receptorId = postData['receptorId'];
+          String receptorNombre = postData['receptorNombre'] ?? '';
+          String duenoId = postData['duenoId'] ?? '';
+
+          bool verificadoEmisor = postData['confirmado_por_emisor'] ?? false;
+          bool verificadoReceptor =
+              postData['confirmado_por_receptor'] ?? false;
+
+          if (transaccionActiva) {
+            bool soyElEmisor = miUid == duenoId;
+            bool soyElReceptor = miUid == receptorId;
+
+            return Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Center(
+                child: Card(
+                  elevation: 4,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.handshake,
+                          size: 60,
+                          color: Colors.orange,
+                        ),
+                        const SizedBox(height: 15),
+                        const Text(
+                          "Trato en Proceso 🤝",
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          "Se requiere que ambos usuarios confirmen que se realizó la entrega física.",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.grey.shade600,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const Divider(height: 30),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          children: [
+                            Column(
+                              children: [
+                                Icon(
+                                  verificadoEmisor
+                                      ? Icons.check_circle
+                                      : Icons.radio_button_unchecked,
+                                  color: verificadoEmisor
+                                      ? Colors.green
+                                      : Colors.grey,
+                                ),
+                                const Text(
+                                  "Dueño del Post",
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Column(
+                              children: [
+                                Icon(
+                                  verificadoReceptor
+                                      ? Icons.check_circle
+                                      : Icons.radio_button_unchecked,
+                                  color: verificadoReceptor
+                                      ? Colors.green
+                                      : Colors.grey,
+                                ),
+                                Text(
+                                  soyElEmisor
+                                      ? receptorNombre
+                                      : "Tu Confirmación",
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 25),
+                        if (soyElEmisor && !verificadoEmisor)
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                            ),
+                            onPressed: () async {
+                              await FirebaseFirestore.instance
+                                  .collection(coleccionOrigen)
+                                  .doc(donacionId)
+                                  .update({'confirmado_por_emisor': true});
+                              if (verificadoReceptor) {
+                                if (!context.mounted) return;
+                                _procesarConfirmacionFinal(
+                                  context,
+                                  duenoId,
+                                  receptorId!,
+                                  postData,
+                                );
+                              }
+                            },
+                            child: const Text(
+                              "YO CONFIRMO LA ENTREGA",
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        if (soyElReceptor && !verificadoReceptor)
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                            ),
+                            onPressed: () async {
+                              await FirebaseFirestore.instance
+                                  .collection(coleccionOrigen)
+                                  .doc(donacionId)
+                                  .update({'confirmado_por_receptor': true});
+                              if (verificadoEmisor) {
+                                if (!context.mounted) return;
+                                _procesarConfirmacionFinal(
+                                  context,
+                                  duenoId,
+                                  receptorId!,
+                                  postData,
+                                );
+                              }
+                            },
+                            child: const Text(
+                              "YO CONFIRMO QUE RECIBÍ EL ARTÍCULO",
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        if ((soyElEmisor && verificadoEmisor) ||
+                            (soyElReceptor && verificadoReceptor))
+                          const Text(
+                            "⏳ Esperando que la otra parte confirme...",
+                            style: TextStyle(
+                              fontStyle: FontStyle.italic,
+                              color: Colors.orange,
+                            ),
+                          ),
+                        const SizedBox(height: 15),
+                        TextButton.icon(
+                          onPressed: () async {
+                            await FirebaseFirestore.instance
+                                .collection(coleccionOrigen)
+                                .doc(donacionId)
+                                .update({
+                                  'transaccion_activa': false,
+                                  'receptorId': null,
+                                  'receptorNombre': null,
+                                  'confirmado_por_emisor': false,
+                                  'confirmado_por_receptor': false,
+                                });
+                          },
+                          icon: const Icon(
+                            Icons.cancel,
+                            color: Colors.red,
+                            size: 16,
+                          ),
+                          label: const Text(
+                            "Cancelar trato y liberar muro",
+                            style: TextStyle(color: Colors.red, fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }
+
+          return StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection(coleccionOrigen)
+                .doc(donacionId)
+                .collection('postulantes')
+                .orderBy('fecha', descending: false)
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+
+              var candidatos = snapshot.data!.docs;
+              if (candidatos.isEmpty) {
+                return const Center(
+                  child: Text("Aún no se ha postulado nadie."),
+                );
+              }
+
+              return ListView.builder(
+                itemCount: candidatos.length,
+                itemBuilder: (context, index) {
+                  var c = candidatos[index].data() as Map<String, dynamic>;
+                  String nombre = c['nombre'] ?? 'Interesado';
+                  String telefono = c['telefono'] ?? '';
+                  String candidatoUid = c['uid'] ?? '';
+
+                  return Card(
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 15,
+                      vertical: 8,
+                    ),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: Colors.orange.shade100,
+                        child: Text(
+                          "${index + 1}",
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.orange,
+                          ),
+                        ),
+                      ),
+                      title: Text(
+                        nombre,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Text("Teléfono: $telefono"),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(
+                              Icons.message,
+                              color: Colors.green,
+                            ),
+                            onPressed: () =>
+                                _abrirWhatsApp(context, nombre, telefono),
+                          ),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                            ),
+                            onPressed: () => _iniciarTransaccion(
+                              context,
+                              candidatoUid,
+                              nombre,
+                            ),
+                            child: const Text(
+                              "ENTREGAR",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
