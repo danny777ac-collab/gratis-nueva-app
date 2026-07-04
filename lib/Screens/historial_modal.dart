@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:gratis_nueva/supabase_config.dart';
 
 class HistorialModal {
   static void mostrar(BuildContext context, String uidUsuario) {
@@ -44,10 +44,10 @@ class HistorialModal {
               ),
               const Divider(height: 25),
               Expanded(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('historial')
-                      .snapshots(),
+                child: StreamBuilder<List<Map<String, dynamic>>>(
+                  stream: supabase
+                      .from('historial')
+                      .stream(primaryKey: ['id']),
                   builder: (context, snapshot) {
                     if (snapshot.hasError) {
                       return Center(child: Text("Error: ${snapshot.error}"));
@@ -56,8 +56,7 @@ class HistorialModal {
                       return const Center(child: CircularProgressIndicator());
                     }
 
-                    var logs = snapshot.data!.docs.where((doc) {
-                      var data = doc.data() as Map<String, dynamic>;
+                    var logs = snapshot.data!.where((data) {
                       return data['emisorId'] == uidUsuario ||
                           data['receptorId'] == uidUsuario;
                     }).toList();
@@ -74,7 +73,7 @@ class HistorialModal {
                     return ListView.builder(
                       itemCount: logs.length,
                       itemBuilder: (context, index) {
-                        var data = logs[index].data() as Map<String, dynamic>;
+                        var data = logs[index];
                         String titulo =
                             data['tituloActividad'] ?? 'Intercambio';
                         String fecha = data['fecha'] ?? '';

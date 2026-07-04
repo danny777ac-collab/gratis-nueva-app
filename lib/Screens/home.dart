@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:gratis_nueva/supabase_config.dart';
 import 'perfil.dart';
 import '../donar.dart';
 import '../busqueda_screen.dart';
@@ -18,7 +17,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final String currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final String currentUid = supabase.auth.currentUser?.id ?? '';
 
     return Scaffold(
       body: IndexedStack(
@@ -102,22 +101,22 @@ class MuroPrincipalTabs extends StatelessWidget {
   Widget _construirMuro({required String coleccion, required bool esDorado}) {
     return Container(
       color: esDorado ? const Color(0xFFF8F8FF) : const Color(0xFF1A1A1A),
-      child: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection(coleccion)
-            .orderBy('fecha', descending: true)
-            .snapshots(),
+      child: StreamBuilder<List<Map<String, dynamic>>>(
+        stream: supabase
+            .from(coleccion)
+            .stream(primaryKey: ['id'])
+            .order('fecha', ascending: false),
         builder: (context, snapshot) {
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
-          final posts = snapshot.data!.docs;
+          final posts = snapshot.data!;
 
           return ListView.builder(
             padding: const EdgeInsets.all(12),
             itemCount: posts.length,
             itemBuilder: (context, i) {
-              final data = posts[i].data() as Map<String, dynamic>;
+              final data = posts[i];
               final List<dynamic> imgs = data['imagenesUrls'] ?? [];
               final List<dynamic> postulantes = data['postulantes'] ?? [];
               final bool esDuenio = (data['usuarioId'] ?? '') == currentUid;
@@ -207,7 +206,7 @@ class MuroPrincipalTabs extends StatelessWidget {
                             onSelected: (value) {
                               SeguridadManager.reportarContenido(
                                 context,
-                                posts[i].id,
+                                posts[i]['id'],
                                 "Reporte: $value",
                                 currentUid,
                               );
@@ -260,14 +259,12 @@ class MuroPrincipalTabs extends StatelessWidget {
                                   ),
                                 );
                               } else {
-                                FirebaseFirestore.instance
-                                    .collection(coleccion)
-                                    .doc(posts[i].id)
+                                supabase
+                                    .from(coleccion)
                                     .update({
-                                      'postulantes': FieldValue.arrayUnion([
-                                        currentUid,
-                                      ]),
-                                    });
+                                      'postulantes': [...postulantes, currentUid],
+                                    })
+                                    .eq('id', posts[i]['id']);
                               }
                             },
                             child: Text(

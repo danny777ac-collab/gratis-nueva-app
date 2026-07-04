@@ -4,8 +4,6 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Pega esta línea justo aquí abajo, separada de los otros
-apply(plugin = "com.google.gms.google-services")
 android {
     namespace = "com.example.gratis_nueva"
     compileSdk = flutter.compileSdkVersion
