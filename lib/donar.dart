@@ -1,9 +1,8 @@
 // ignore_for_file: deprecated_member_use
 // ignore_for_file: implementation_imports
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:gratis_nueva/supabase_config.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 
@@ -74,13 +73,15 @@ class _DonarScreenState extends State<DonarScreen> {
 
   Future<List<String>> _subirImagenes(String postId) async {
     List<String> urls = [];
+    final storage = supabase.storage.from('publicaciones');
     for (int i = 0; i < _imagenesSeleccionadas.length; i++) {
-      final ref = FirebaseStorage.instance.ref().child(
-        'publicaciones/$postId/imagen_$i.jpg',
+      final path = '$postId/imagen_$i.jpg';
+      await storage.upload(
+        path,
+        _imagenesSeleccionadas[i],
+        fileOptions: const FileOptions(upsert: true),
       );
-      await ref.putFile(_imagenesSeleccionadas[i]);
-      String url = await ref.getDownloadURL();
-      urls.add(url);
+      urls.add(storage.getPublicUrl(path));
     }
     return urls;
   }
@@ -91,46 +92,53 @@ class _DonarScreenState extends State<DonarScreen> {
     setState(() => _guardando = true);
 
     try {
-      final user = FirebaseAuth.instance.currentUser;
+      final user = supabase.auth.currentUser;
       if (user == null) return;
 
-      var userDoc = await FirebaseFirestore.instance
-          .collection('usuarios')
-          .doc(user.uid)
-          .get();
-      String nombreUsuario = userDoc.data()?['nombre'] ?? 'Anónimo';
-      String telefonoUsuario = userDoc.data()?['telefono'] ?? '';
+      final userDoc = await supabase
+          .from('usuarios')
+          .select('nombre, telefono')
+          .eq('id', user.id)
+          .maybeSingle();
+      String nombreUsuario = userDoc?['nombre'] ?? 'Anónimo';
+      String telefonoUsuario = userDoc?['telefono'] ?? '';
 
-      final docRef = FirebaseFirestore.instance
-          .collection(widget.tipoPublicacion)
-          .doc();
+      final inserted = await supabase
+          .from(widget.tipoPublicacion)
+          .insert({
+            'usuarioId': user.id,
+            'duenoId': user.id,
+            'usuarioNombre': nombreUsuario,
+            'autorNombre': nombreUsuario,
+            'usuarioTelefono': telefonoUsuario,
+            'titulo': _tituloController.text.trim(),
+            'descripcion': _descripcionController.text.trim(),
+            'ubicacion': _ubicacionController.text.trim().isEmpty
+                ? 'Santa Cruz, Bolivia'
+                : _ubicacionController.text.trim(),
+            'categoria': _categoriaSeleccionada,
+            'imagenesUrls': [],
+            'expiraEn': DateTime.now()
+                .add(const Duration(hours: 24))
+                .toUtc()
+                .toIso8601String(),
+            'postulantes': [],
+            'transaccionConfirmadaEmisor': false,
+            'transaccionConfirmadaReceptor': false,
+            'receptorConfirmadoId': '',
+          })
+          .select()
+          .single();
 
-      List<String> urlsImagenes = [];
+      final String postId = inserted['id'] as String;
+
       if (_imagenesSeleccionadas.isNotEmpty) {
-        urlsImagenes = await _subirImagenes(docRef.id);
+        final urlsImagenes = await _subirImagenes(postId);
+        await supabase
+            .from(widget.tipoPublicacion)
+            .update({'imagenesUrls': urlsImagenes})
+            .eq('id', postId);
       }
-
-      await docRef.set({
-        'id': docRef.id,
-        'usuarioId': user.uid,
-        'usuarioNombre': nombreUsuario,
-        'usuarioTelefono': telefonoUsuario,
-        'titulo': _tituloController.text.trim(),
-        'descripcion': _descripcionController.text.trim(),
-        'ubicacion': _ubicacionController.text.trim().isEmpty
-            ? 'Santa Cruz, Bolivia'
-            : _ubicacionController.text.trim(),
-        'categoria': _categoriaSeleccionada,
-        'imagenesUrls': urlsImagenes,
-        'fecha': FieldValue.serverTimestamp(),
-        'expiraEn': Timestamp.fromDate(
-          DateTime.now().add(const Duration(hours: 24)),
-        ),
-        'postulantes': [],
-        'transaccionConfirmadaEmisor': false,
-        'transaccionConfirmadaReceptor': false,
-        'receptorConfirmadoId': '',
-      });
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

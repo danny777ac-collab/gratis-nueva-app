@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:gratis_nueva/supabase_config.dart';
 
 class SeguridadManager {
   static Future<void> reportarContenido(
@@ -9,11 +9,10 @@ class SeguridadManager {
     String usuarioReportadorId,
   ) async {
     try {
-      await FirebaseFirestore.instance.collection('reportes').add({
+      await supabase.from('reportes').insert({
         'postId': postId,
         'motivo': motivo,
         'reportadorId': usuarioReportadorId,
-        'fecha': FieldValue.serverTimestamp(),
         'estado': 'pendiente',
       });
 

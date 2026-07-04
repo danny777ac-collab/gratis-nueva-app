@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:gratis_nueva/supabase_config.dart';
 
 class RegistroScreen extends StatefulWidget {
   const RegistroScreen({super.key});
@@ -33,26 +33,22 @@ class _RegistroScreenState extends State<RegistroScreen> {
     setState(() => _cargando = true);
 
     try {
-      UserCredential userCredential = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(
-            email: _emailController.text.trim(),
-            password: _passwordController.text.trim(),
-          );
+      final AuthResponse res = await supabase.auth.signUp(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+        data: {'nombre': _nombreController.text.trim()},
+      );
 
-      String? uid = userCredential.user?.uid;
+      final String? uid = res.user?.id;
 
       if (uid != null) {
-        await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+        await supabase.from('usuarios').insert({
+          'id': uid,
           'uid': uid,
           'nombre': _nombreController.text.trim(),
           'email': _emailController.text.trim(),
           'telefono': _telefonoController.text.trim(),
-          'fecha_registro': FieldValue.serverTimestamp(),
         });
-
-        await userCredential.user?.updateDisplayName(
-          _nombreController.text.trim(),
-        );
 
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -67,11 +63,14 @@ class _RegistroScreenState extends State<RegistroScreen> {
       if (mounted) {
         Navigator.pop(context);
       }
-    } on FirebaseAuthException catch (e) {
+    } on AuthException catch (e) {
       String mensajeError = "Ocurrió un error";
-      if (e.code == 'weak-password') {
+      final msg = e.message.toLowerCase();
+      if (msg.contains('password')) {
         mensajeError = "La contraseña es muy débil (mínimo 6 caracteres)";
-      } else if (e.code == 'email-already-in-use') {
+      } else if (msg.contains('already registered') ||
+          msg.contains('already been registered') ||
+          msg.contains('user already')) {
         mensajeError = "Este correo ya está registrado";
       }
 

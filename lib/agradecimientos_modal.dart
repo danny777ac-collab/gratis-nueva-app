@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:gratis_nueva/supabase_config.dart';
 
 class AgradecimientosModal {
   static void mostrar(BuildContext context, String uidUsuario) {
@@ -38,13 +38,12 @@ class AgradecimientosModal {
               ),
               const Divider(height: 20),
               Expanded(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('usuarios')
-                      .doc(uidUsuario)
-                      .collection('comentarios')
-                      .orderBy('fecha', descending: true)
-                      .snapshots(),
+                child: StreamBuilder<List<Map<String, dynamic>>>(
+                  stream: supabase
+                      .from('comentarios')
+                      .stream(primaryKey: ['id'])
+                      .eq('usuario_id', uidUsuario)
+                      .order('fecha', ascending: false),
                   builder: (context, snapshot) {
                     if (snapshot.hasError) {
                       return Center(child: Text("Error al cargar comentarios"));
@@ -53,7 +52,7 @@ class AgradecimientosModal {
                       return const Center(child: CircularProgressIndicator());
                     }
 
-                    var comentarios = snapshot.data!.docs;
+                    var comentarios = snapshot.data!;
 
                     if (comentarios.isEmpty) {
                       return const Center(
@@ -67,8 +66,7 @@ class AgradecimientosModal {
                     return ListView.builder(
                       itemCount: comentarios.length,
                       itemBuilder: (context, cIndex) {
-                        var cData =
-                            comentarios[cIndex].data() as Map<String, dynamic>;
+                        var cData = comentarios[cIndex];
                         return Card(
                           margin: const EdgeInsets.symmetric(vertical: 4),
                           child: ListTile(

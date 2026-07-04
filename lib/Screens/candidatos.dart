@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:gratis_nueva/supabase_config.dart';
 
 class CandidatosScreen extends StatelessWidget {
   final String donacionId;
@@ -42,16 +41,16 @@ class CandidatosScreen extends StatelessWidget {
     String candidatoUid,
     String candidatoNombre,
   ) async {
-    await FirebaseFirestore.instance
-        .collection(coleccionOrigen)
-        .doc(donacionId)
+    await supabase
+        .from(coleccionOrigen)
         .update({
           'transaccion_activa': true,
           'receptorId': candidatoUid,
           'receptorNombre': candidatoNombre,
           'confirmado_por_emisor': false,
           'confirmado_por_receptor': false,
-        });
+        })
+        .eq('id', donacionId);
 
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -71,15 +70,8 @@ class CandidatosScreen extends StatelessWidget {
     String receptorId,
     Map<String, dynamic> datosPost,
   ) async {
-    final DocumentReference emisorRef = FirebaseFirestore.instance
-        .collection('usuarios')
-        .doc(emisorId);
-    final DocumentReference receptorRef = FirebaseFirestore.instance
-        .collection('usuarios')
-        .doc(receptorId);
-
     // 1. Guardar copia en la colección global de historial antes de borrar el post
-    await FirebaseFirestore.instance.collection('historial').add({
+    await supabase.from('historial').insert({
       'item': datosPost['item'] ?? 'Sin título',
       'descripcion': datosPost['descripcion'] ?? '',
       'categoria': datosPost['categoria'] ?? 'Cosas',
@@ -88,56 +80,44 @@ class CandidatosScreen extends StatelessWidget {
       'emisorNombre': datosPost['donante'] ?? 'Usuario',
       'receptorId': receptorId,
       'receptorNombre': datosPost['receptorNombre'] ?? 'Candidato',
-      'fecha_completado': FieldValue.serverTimestamp(),
     });
 
-    // 2. Ejecutar transacción para incrementar los contadores en los perfiles de los usuarios
-    await FirebaseFirestore.instance.runTransaction((transaction) async {
-      DocumentSnapshot emisorSnap = await transaction.get(emisorRef);
-      DocumentSnapshot receptorSnap = await transaction.get(receptorRef);
+    // 2. Incrementar los contadores en los perfiles de los usuarios
+    final emisorSnap = await supabase
+        .from('usuarios')
+        .select('donaciones_entregadas, donaciones_recibidas')
+        .eq('id', emisorId)
+        .maybeSingle();
+    final receptorSnap = await supabase
+        .from('usuarios')
+        .select('donaciones_entregadas, donaciones_recibidas')
+        .eq('id', receptorId)
+        .maybeSingle();
 
-      if (emisorSnap.exists && receptorSnap.exists) {
-        int actualesEntregadas =
-            (emisorSnap.data()
-                as Map<String, dynamic>)['donaciones_entregadas'] ??
-            0;
-        int actualesRecibidas =
-            (receptorSnap.data()
-                as Map<String, dynamic>)['donaciones_recibidas'] ??
-            0;
-
-        if (coleccionOrigen == 'donaciones') {
-          transaction.update(emisorRef, {
-            'donaciones_entregadas': actualesEntregadas + 1,
-          });
-          transaction.update(receptorRef, {
-            'donaciones_recibidas': actualesRecibidas + 1,
-          });
-        } else {
-          int miActualRecibida =
-              (emisorSnap.data()
-                  as Map<String, dynamic>)['donaciones_recibidas'] ??
-              0;
-          int candidatoActualEntregada =
-              (receptorSnap.data()
-                  as Map<String, dynamic>)['donaciones_entregadas'] ??
-              0;
-
-          transaction.update(emisorRef, {
-            'donaciones_recibidas': miActualRecibida + 1,
-          });
-          transaction.update(receptorRef, {
-            'donaciones_entregadas': candidatoActualEntregada + 1,
-          });
-        }
+    if (emisorSnap != null && receptorSnap != null) {
+      if (coleccionOrigen == 'donaciones') {
+        await supabase.from('usuarios').update({
+          'donaciones_entregadas':
+              (emisorSnap['donaciones_entregadas'] ?? 0) + 1,
+        }).eq('id', emisorId);
+        await supabase.from('usuarios').update({
+          'donaciones_recibidas':
+              (receptorSnap['donaciones_recibidas'] ?? 0) + 1,
+        }).eq('id', receptorId);
+      } else {
+        await supabase.from('usuarios').update({
+          'donaciones_recibidas':
+              (emisorSnap['donaciones_recibidas'] ?? 0) + 1,
+        }).eq('id', emisorId);
+        await supabase.from('usuarios').update({
+          'donaciones_entregadas':
+              (receptorSnap['donaciones_entregadas'] ?? 0) + 1,
+        }).eq('id', receptorId);
       }
-    });
+    }
 
     // 3. Borrar el documento original del muro
-    await FirebaseFirestore.instance
-        .collection(coleccionOrigen)
-        .doc(donacionId)
-        .delete();
+    await supabase.from(coleccionOrigen).delete().eq('id', donacionId);
 
     if (!context.mounted) return;
     Navigator.pop(context);
@@ -151,28 +131,28 @@ class CandidatosScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final String miUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final String miUid = supabase.auth.currentUser?.id ?? '';
 
     return Scaffold(
       appBar: AppBar(
         title: const Text("Gestión de Entrega"),
         backgroundColor: Colors.orange,
       ),
-      body: StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection(coleccionOrigen)
-            .doc(donacionId)
-            .snapshots(),
+      body: StreamBuilder<List<Map<String, dynamic>>>(
+        stream: supabase
+            .from(coleccionOrigen)
+            .stream(primaryKey: ['id'])
+            .eq('id', donacionId),
         builder: (context, postSnapshot) {
           if (!postSnapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          if (!postSnapshot.data!.exists) {
+          if (postSnapshot.data!.isEmpty) {
             return const Center(child: Text("La publicación ya no existe."));
           }
 
-          var postData = postSnapshot.data!.data() as Map<String, dynamic>;
+          var postData = postSnapshot.data!.first;
           bool transaccionActiva = postData['transaccion_activa'] ?? false;
           String? receptorId = postData['receptorId'];
           String receptorNombre = postData['receptorNombre'] ?? '';
@@ -274,10 +254,10 @@ class CandidatosScreen extends StatelessWidget {
                               backgroundColor: Colors.green,
                             ),
                             onPressed: () async {
-                              await FirebaseFirestore.instance
-                                  .collection(coleccionOrigen)
-                                  .doc(donacionId)
-                                  .update({'confirmado_por_emisor': true});
+                              await supabase
+                                  .from(coleccionOrigen)
+                                  .update({'confirmado_por_emisor': true})
+                                  .eq('id', donacionId);
                               if (verificadoReceptor) {
                                 if (!context.mounted) return;
                                 _procesarConfirmacionFinal(
@@ -299,10 +279,10 @@ class CandidatosScreen extends StatelessWidget {
                               backgroundColor: Colors.green,
                             ),
                             onPressed: () async {
-                              await FirebaseFirestore.instance
-                                  .collection(coleccionOrigen)
-                                  .doc(donacionId)
-                                  .update({'confirmado_por_receptor': true});
+                              await supabase
+                                  .from(coleccionOrigen)
+                                  .update({'confirmado_por_receptor': true})
+                                  .eq('id', donacionId);
                               if (verificadoEmisor) {
                                 if (!context.mounted) return;
                                 _procesarConfirmacionFinal(
@@ -330,16 +310,16 @@ class CandidatosScreen extends StatelessWidget {
                         const SizedBox(height: 15),
                         TextButton.icon(
                           onPressed: () async {
-                            await FirebaseFirestore.instance
-                                .collection(coleccionOrigen)
-                                .doc(donacionId)
+                            await supabase
+                                .from(coleccionOrigen)
                                 .update({
                                   'transaccion_activa': false,
                                   'receptorId': null,
                                   'receptorNombre': null,
                                   'confirmado_por_emisor': false,
                                   'confirmado_por_receptor': false,
-                                });
+                                })
+                                .eq('id', donacionId);
                           },
                           icon: const Icon(
                             Icons.cancel,
@@ -359,19 +339,18 @@ class CandidatosScreen extends StatelessWidget {
             );
           }
 
-          return StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection(coleccionOrigen)
-                .doc(donacionId)
-                .collection('postulantes')
-                .orderBy('fecha', descending: false)
-                .snapshots(),
+          return StreamBuilder<List<Map<String, dynamic>>>(
+            stream: supabase
+                .from('postulantes')
+                .stream(primaryKey: ['id'])
+                .eq('post_id', donacionId)
+                .order('fecha', ascending: true),
             builder: (context, snapshot) {
               if (!snapshot.hasData) {
                 return const Center(child: CircularProgressIndicator());
               }
 
-              var candidatos = snapshot.data!.docs;
+              var candidatos = snapshot.data!;
               if (candidatos.isEmpty) {
                 return const Center(
                   child: Text("Aún no se ha postulado nadie."),
@@ -381,7 +360,7 @@ class CandidatosScreen extends StatelessWidget {
               return ListView.builder(
                 itemCount: candidatos.length,
                 itemBuilder: (context, index) {
-                  var c = candidatos[index].data() as Map<String, dynamic>;
+                  var c = candidatos[index];
                   String nombre = c['nombre'] ?? 'Interesado';
                   String telefono = c['telefono'] ?? '';
                   String candidatoUid = c['uid'] ?? '';

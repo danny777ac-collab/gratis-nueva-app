@@ -1,9 +1,8 @@
 // ignore_for_file: use_build_context_synchronously, deprecated_member_use
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:gratis_nueva/supabase_config.dart';
 import 'package:image_picker/image_picker.dart';
 import 'crear_grupo_screen.dart';
 import 'historial_modal.dart';
@@ -19,7 +18,7 @@ class PerfilScreen extends StatefulWidget {
 }
 
 class _PerfilScreenState extends State<PerfilScreen> {
-  final String currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+  final String currentUid = supabase.auth.currentUser?.id ?? '';
   final TextEditingController _bioController = TextEditingController();
 
   bool privacidad = true;
@@ -39,19 +38,19 @@ class _PerfilScreenState extends State<PerfilScreen> {
       privacidad = val;
     });
     if (currentUid.isNotEmpty) {
-      await FirebaseFirestore.instance
-          .collection('usuarios')
-          .doc(currentUid)
-          .update({'privacidad': val});
+      await supabase
+          .from('usuarios')
+          .update({'privacidad': val})
+          .eq('id', currentUid);
     }
   }
 
   Future<void> _guardarBio(String nuevaBio) async {
     if (currentUid.isNotEmpty) {
-      await FirebaseFirestore.instance
-          .collection('usuarios')
-          .doc(currentUid)
-          .update({'descripcion_bio': nuevaBio});
+      await supabase
+          .from('usuarios')
+          .update({'descripcion_bio': nuevaBio})
+          .eq('id', currentUid);
     }
   }
 
@@ -70,18 +69,24 @@ class _PerfilScreenState extends State<PerfilScreen> {
     });
 
     try {
-      final ref = FirebaseStorage.instance
-          .ref()
-          .child('perfiles')
-          .child('$currentUid.jpg');
+      final path = '$currentUid.jpg';
 
-      await ref.putFile(_imageFile!);
-      final url = await ref.getDownloadURL();
+      await supabase.storage
+          .from('perfiles')
+          .upload(
+            path,
+            _imageFile!,
+            fileOptions: const FileOptions(upsert: true),
+          );
 
-      await FirebaseFirestore.instance
-          .collection('usuarios')
-          .doc(currentUid)
-          .update({'fotoPerfilUrl': url});
+      final baseUrl = supabase.storage.from('perfiles').getPublicUrl(path);
+      // Cache-busting para que se refresque la imagen tras reemplazarla.
+      final url = '$baseUrl?t=${DateTime.now().millisecondsSinceEpoch}';
+
+      await supabase
+          .from('usuarios')
+          .update({'fotoPerfilUrl': url})
+          .eq('id', currentUid);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -116,11 +121,11 @@ class _PerfilScreenState extends State<PerfilScreen> {
 
     final bool esMiPerfil = uidAConsultar == currentUid;
 
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('usuarios')
-          .doc(uidAConsultar)
-          .snapshots(),
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: supabase
+          .from('usuarios')
+          .stream(primaryKey: ['id'])
+          .eq('id', uidAConsultar),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
@@ -128,13 +133,13 @@ class _PerfilScreenState extends State<PerfilScreen> {
           );
         }
 
-        if (snapshot.hasError || !snapshot.hasData || !snapshot.data!.exists) {
+        if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) {
           return const Scaffold(
             body: Center(child: Text("Error al cargar los datos del perfil")),
           );
         }
 
-        var userData = snapshot.data!.data() as Map<String, dynamic>;
+        var userData = snapshot.data!.first;
         String nombre = userData['nombre'] ?? 'Usuario';
         String email = userData['email'] ?? 'Sin correo';
         String bio = userData['descripcion_bio'] ?? 'Sin descripción todavía.';

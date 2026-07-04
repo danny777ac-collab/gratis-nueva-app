@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:gratis_nueva/supabase_config.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -16,14 +17,17 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _iniciarSesion() async {
     setState(() => _cargando = true);
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
+      await supabase.auth.signInWithPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
-    } on FirebaseAuthException catch (e) {
+    } on AuthException catch (e) {
       String errorMsg = "Datos incorrectos";
-      if (e.code == 'user-not-found') errorMsg = "El usuario no existe";
-      if (e.code == 'wrong-password') errorMsg = "Contraseña incorrecta";
+      final msg = e.message.toLowerCase();
+      if (msg.contains('invalid login')) errorMsg = "Correo o contraseña incorrectos";
+      if (msg.contains('email not confirmed')) {
+        errorMsg = "Debes confirmar tu correo antes de ingresar";
+      }
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

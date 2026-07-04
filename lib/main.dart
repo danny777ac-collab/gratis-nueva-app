@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:gratis_nueva/screens/home.dart';
-import 'package:gratis_nueva/screens/login.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:gratis_nueva/Screens/home.dart';
+import 'package:gratis_nueva/Screens/login.dart';
+import 'package:gratis_nueva/supabase_config.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+  await Supabase.initialize(
+    url: supabaseUrl,
+    // ignore: deprecated_member_use
+    anonKey: supabaseAnonKey,
+  );
   runApp(const MyApp());
 }
 
@@ -19,15 +23,16 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Gracia',
       theme: ThemeData(primarySwatch: Colors.indigo, useMaterial3: true),
-      home: StreamBuilder<User?>(
-        stream: FirebaseAuth.instance.authStateChanges(),
+      home: StreamBuilder<AuthState>(
+        stream: supabase.auth.onAuthStateChange,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Scaffold(
               body: Center(child: CircularProgressIndicator()),
             );
           }
-          if (snapshot.hasData && snapshot.data != null) {
+          final session = snapshot.data?.session ?? supabase.auth.currentSession;
+          if (session != null) {
             return const HomeScreen();
           }
           return const LoginScreen();
