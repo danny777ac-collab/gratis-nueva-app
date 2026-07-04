@@ -32,6 +32,22 @@ create table if not exists public.usuarios (
   donaciones_recibidas integer default 0
 );
 
+-- Completa columnas faltantes si la tabla ya existía (migración parcial).
+alter table public.usuarios add column if not exists uid text;
+alter table public.usuarios add column if not exists nombre text;
+alter table public.usuarios add column if not exists email text;
+alter table public.usuarios add column if not exists telefono text;
+alter table public.usuarios add column if not exists fecha_registro timestamptz default now();
+alter table public.usuarios add column if not exists privacidad boolean default true;
+alter table public.usuarios add column if not exists descripcion_bio text;
+alter table public.usuarios add column if not exists "fotoPerfilUrl" text;
+alter table public.usuarios add column if not exists s_entregadas integer default 0;
+alter table public.usuarios add column if not exists s_recibidas integer default 0;
+alter table public.usuarios add column if not exists s_reputacion boolean default true;
+alter table public.usuarios add column if not exists nombre_mesias_personalizado text;
+alter table public.usuarios add column if not exists donaciones_entregadas integer default 0;
+alter table public.usuarios add column if not exists donaciones_recibidas integer default 0;
+
 -- ---------------------------------------------------------------------
 -- Tablas: donaciones y necesidades (antes colecciones del "muro")
 -- ---------------------------------------------------------------------
@@ -86,6 +102,37 @@ create table if not exists public.necesidades (
   "transaccionConfirmadaReceptor" boolean default false,
   "receptorConfirmadoId" text default ''
 );
+
+-- Completa columnas faltantes en donaciones/necesidades si ya existían.
+do $$
+declare t text;
+begin
+  foreach t in array array['donaciones','necesidades']
+  loop
+    execute format('alter table public.%I add column if not exists "usuarioId" text;', t);
+    execute format('alter table public.%I add column if not exists "usuarioNombre" text;', t);
+    execute format('alter table public.%I add column if not exists "usuarioTelefono" text;', t);
+    execute format('alter table public.%I add column if not exists "duenoId" text;', t);
+    execute format('alter table public.%I add column if not exists "autorNombre" text;', t);
+    execute format('alter table public.%I add column if not exists "autorFoto" text;', t);
+    execute format('alter table public.%I add column if not exists titulo text;', t);
+    execute format('alter table public.%I add column if not exists descripcion text;', t);
+    execute format('alter table public.%I add column if not exists ubicacion text;', t);
+    execute format('alter table public.%I add column if not exists categoria text;', t);
+    execute format('alter table public.%I add column if not exists "imagenesUrls" jsonb default ''[]''::jsonb;', t);
+    execute format('alter table public.%I add column if not exists postulantes jsonb default ''[]''::jsonb;', t);
+    execute format('alter table public.%I add column if not exists fecha timestamptz default now();', t);
+    execute format('alter table public.%I add column if not exists "expiraEn" timestamptz;', t);
+    execute format('alter table public.%I add column if not exists transaccion_activa boolean default false;', t);
+    execute format('alter table public.%I add column if not exists "receptorId" text;', t);
+    execute format('alter table public.%I add column if not exists "receptorNombre" text;', t);
+    execute format('alter table public.%I add column if not exists confirmado_por_emisor boolean default false;', t);
+    execute format('alter table public.%I add column if not exists confirmado_por_receptor boolean default false;', t);
+    execute format('alter table public.%I add column if not exists "transaccionConfirmadaEmisor" boolean default false;', t);
+    execute format('alter table public.%I add column if not exists "transaccionConfirmadaReceptor" boolean default false;', t);
+    execute format('alter table public.%I add column if not exists "receptorConfirmadoId" text default '''';', t);
+  end loop;
+end $$;
 
 -- ---------------------------------------------------------------------
 -- Tabla: postulantes (antes subcolección donaciones/{id}/postulantes)
